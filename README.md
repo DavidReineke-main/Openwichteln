@@ -40,9 +40,16 @@ und lassen sich im Dashboard mit einem Klick wieder aufwecken.
 ### 1. Supabase-Projekt anlegen
 
 1. Auf [supabase.com](https://supabase.com) kostenlos registrieren und ein neues Projekt erstellen.
-2. Im Projekt **SQL Editor** öffnen, **New query**, den kompletten Inhalt von [`supabase/schema.sql`](supabase/schema.sql)
-   einfügen und **ohne Markierung** auf *Run* klicken (bei markiertem Text führt Supabase nur die Markierung aus).
-   Das Skript kann gefahrlos mehrfach ausgeführt werden.
+2. Schema einspielen – am einfachsten per GitHub Action:
+   - In Supabase oben auf **Connect** klicken → **Session pooler** → die URI kopieren
+     (`postgresql://postgres.<ref>:[YOUR-PASSWORD]@aws-…pooler.supabase.com:5432/postgres`)
+     und `[YOUR-PASSWORD]` durch das Datenbank-Passwort ersetzen.
+   - Im GitHub-Repo unter **Settings → Secrets and variables → Actions → Secrets** ein Secret
+     `SUPABASE_DB_URL` mit dieser URI anlegen.
+   - Unter **Actions → „Supabase-Schema einspielen“ → Run workflow** starten. Bei jeder Änderung an
+     `supabase/schema.sql` auf `main` läuft der Workflow automatisch erneut (das Skript ist wiederholbar).
+
+   Alternativ den Inhalt von `supabase/schema.sql` im **SQL Editor** einfügen und ausführen.
 3. Optional: **Authentication → URL Configuration** → *Site URL* auf `https://davidreineke-main.github.io/Openwichteln/` setzen.
 4. **Wichtig:** Unter **Authentication → Sign In / Providers → Email** „**Confirm email**“ ausschalten
    (die App nutzt keine echten E-Mail-Adressen).
