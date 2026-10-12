@@ -23,21 +23,29 @@ Die Geheimhaltung wird **in der Datenbank** über Row-Level-Security durchgesetz
 nicht im Browser. Selbst wer die Seite manipuliert, kommt nicht an fremde Wünsche, Ausschlüsse oder Paarungen.
 Der Supabase-„anon“-Key im Frontend ist dafür gedacht, öffentlich zu sein.
 
+Anmeldung ohne E-Mail: Man registriert sich nur mit **Benutzername + Passwort**. Intern bildet die App
+daraus eine Platzhalter-Adresse (`benutzername@example.com`), an die nie etwas verschickt wird.
+Passwort vergessen? Das lässt sich nur im Supabase-SQL-Editor neu setzen:
+
+```sql
+update auth.users set encrypted_password = crypt('NEUES-PASSWORT', gen_salt('bf'))
+where email = 'benutzername@example.com';
+```
+
 Hinweis zum kostenlosen Supabase-Plan: Projekte ohne Aktivität werden nach ca. einer Woche pausiert
-und lassen sich im Dashboard mit einem Klick wieder aufwecken. Der eingebaute E-Mail-Versand ist auf wenige
-Mails pro Stunde begrenzt (für Freundes-/Familiengruppen reicht das meist; sonst eigenes SMTP hinterlegen).
+und lassen sich im Dashboard mit einem Klick wieder aufwecken.
 
 ## Einrichtung (ca. 10 Minuten)
 
 ### 1. Supabase-Projekt anlegen
 
 1. Auf [supabase.com](https://supabase.com) kostenlos registrieren und ein neues Projekt erstellen.
-2. Im Projekt **SQL Editor** öffnen, den kompletten Inhalt von [`supabase/schema.sql`](supabase/schema.sql) einfügen und ausführen.
-3. **Authentication → URL Configuration**:
-   - *Site URL*: `https://davidreineke-main.github.io/Openwichteln/`
-   - *Redirect URLs*: dieselbe URL hinzufügen (für lokale Tests zusätzlich z. B. `http://localhost:8000/`).
-4. Optional: Unter **Authentication → Providers → Email** „Confirm email“ ausschalten, wenn sich Leute ohne
-   Bestätigungsmail sofort registrieren können sollen.
+2. Im Projekt **SQL Editor** öffnen, **New query**, den kompletten Inhalt von [`supabase/schema.sql`](supabase/schema.sql)
+   einfügen und **ohne Markierung** auf *Run* klicken (bei markiertem Text führt Supabase nur die Markierung aus).
+   Das Skript kann gefahrlos mehrfach ausgeführt werden.
+3. Optional: **Authentication → URL Configuration** → *Site URL* auf `https://davidreineke-main.github.io/Openwichteln/` setzen.
+4. **Wichtig:** Unter **Authentication → Sign In / Providers → Email** „**Confirm email**“ ausschalten
+   (die App nutzt keine echten E-Mail-Adressen).
 5. Unter **Project Settings → API** die *Project URL* und den *anon public* Key kopieren.
 
 ### 2. GitHub Pages aktivieren

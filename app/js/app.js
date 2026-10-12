@@ -48,9 +48,9 @@ function toast(message, isError = false) {
 
 function errorMessage(err) {
   const msg = err?.message || String(err);
-  if (msg.includes('Invalid login credentials')) return 'E-Mail oder Passwort ist falsch.';
-  if (msg.includes('Email not confirmed')) return 'Bitte bestätige zuerst deine E-Mail-Adresse.';
-  if (msg.includes('User already registered')) return 'Für diese E-Mail gibt es schon ein Konto.';
+  if (msg.includes('Invalid login credentials')) return 'Benutzername oder Passwort ist falsch.';
+  if (msg.includes('Email not confirmed')) return 'Konto noch nicht freigeschaltet: In Supabase muss „Confirm email“ ausgeschaltet sein.';
+  if (msg.includes('User already registered')) return 'Dieser Benutzername ist schon vergeben.';
   if (msg.includes('Password should be')) return 'Das Passwort muss mindestens 6 Zeichen lang sein.';
   return msg;
 }
@@ -96,7 +96,11 @@ function inviteUrl(code) {
 }
 
 function defaultName() {
-  return session?.user?.user_metadata?.display_name || session?.user?.email?.split('@')[0] || '';
+  return session?.user?.user_metadata?.display_name || currentUsername();
+}
+
+function currentUsername() {
+  return session?.user?.user_metadata?.username || session?.user?.email?.split('@')[0] || '';
 }
 
 function navigate(hash) {
@@ -152,7 +156,7 @@ function renderUserbox() {
     return;
   }
   userbox.replaceChildren(
-    h('span', null, session.user.email),
+    h('span', null, currentUsername()),
     h('button', { class: 'secondary small', onclick: () => sb.auth.signOut() }, 'Abmelden'));
 }
 
@@ -169,6 +173,20 @@ function renderSetupHint() {
     h('p', null, 'Die Schritt-für-Schritt-Anleitung steht in der README.')));
 }
 
+// Anmeldung ohne echte E-Mail: Supabase braucht intern eine E-Mail-Adresse,
+// daher wird aus dem Benutzernamen eine Platzhalter-Adresse gebildet.
+// Voraussetzung: "Confirm email" ist in Supabase ausgeschaltet.
+const USERNAME_PATTERN = /^[a-z0-9._-]{3,30}$/;
+const AUTH_EMAIL_DOMAIN = 'example.com';
+
+function usernameToEmail(username) {
+  return `${username}@${AUTH_EMAIL_DOMAIN}`;
+}
+
+function normalizeUsername(value) {
+  return value.trim().toLowerCase();
+}
+
 function renderAuth() {
   let mode = 'login';
   const invited = !!storageGet(PENDING_INVITE_KEY);
@@ -177,41 +195,47 @@ function renderAuth() {
     const isRegister = mode === 'register';
     const form = h('form', { class: 'stack' },
       isRegister && h('div', null,
-        h('label', { for: 'name' }, 'Dein Name'),
+        h('label', { for: 'name' }, 'Dein Name (so sehen dich die anderen)'),
         h('input', { id: 'name', name: 'name', required: true, maxlength: 60, autocomplete: 'name' })),
       h('div', null,
-        h('label', { for: 'email' }, 'E-Mail'),
-        h('input', { id: 'email', name: 'email', type: 'email', required: true, autocomplete: 'email' })),
+        h('label', { for: 'username' }, 'Benutzername'),
+        h('input', {
+          id: 'username', name: 'username', required: true, minlength: 3, maxlength: 30,
+          autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false',
+        }),
+        isRegister && h('p', { class: 'small muted' }, '3–30 Zeichen: Buchstaben, Zahlen, . _ -')),
       h('div', null,
         h('label', { for: 'password' }, 'Passwort'),
         h('input', {
           id: 'password', name: 'password', type: 'password', required: true, minlength: 6,
           autocomplete: isRegister ? 'new-password' : 'current-password',
-        })),
+        }),
+        isRegister && h('p', { class: 'small muted' },
+          'Gut merken – ohne E-Mail lässt sich das Passwort nicht zurücksetzen.')),
       h('div', { class: 'row' },
         h('button', { type: 'submit' }, isRegister ? 'Konto erstellen' : 'Anmelden'),
         h('button', {
           type: 'button', class: 'link',
           onclick: () => { mode = isRegister ? 'login' : 'register'; draw(); },
-        }, isRegister ? 'Ich habe schon ein Konto' : 'Neu hier? Konto erstellen')),
-      !isRegister && h('p', { class: 'small muted' }, 'Passwort vergessen? ',
-        h('button', { type: 'button', class: 'link small', onclick: (e) => sendMagicLink(e.target, form) },
-          'Login-Link per E-Mail schicken')));
+        }, isRegister ? 'Ich habe schon ein Konto' : 'Neu hier? Konto erstellen')));
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const button = form.querySelector('button[type=submit]');
-      const { name, email, password } = formData(form);
+      const { name, password } = formData(form);
+      const username = normalizeUsername(formData(form).username);
+      if (!USERNAME_PATTERN.test(username)) {
+        return toast('Benutzername: 3–30 Zeichen aus Buchstaben, Zahlen, . _ -', true);
+      }
+      const email = usernameToEmail(username);
       run(button, async () => {
         if (isRegister) {
           const data = must(await sb.auth.signUp({
             email, password,
-            options: { data: { display_name: name.trim() }, emailRedirectTo: location.origin + location.pathname },
+            options: { data: { display_name: name.trim(), username } },
           }));
           if (!data.session) {
-            render(h('div', { class: 'card highlight' },
-              h('h2', null, 'Fast geschafft 📬'),
-              h('p', null, `Wir haben dir eine E-Mail an ${email} geschickt. Klicke auf den Link darin, um dein Konto zu bestätigen.`)));
+            toast('Konto erstellt, aber Supabase verlangt noch eine E-Mail-Bestätigung. Bitte in Supabase „Confirm email“ ausschalten.', true);
           }
         } else {
           must(await sb.auth.signInWithPassword({ email, password }));
@@ -228,17 +252,6 @@ function renderAuth() {
         form));
   };
   draw();
-}
-
-async function sendMagicLink(button, form) {
-  const email = form.querySelector('[name=email]').value.trim();
-  if (!email) return toast('Bitte zuerst deine E-Mail eintragen.', true);
-  await run(button, async () => {
-    must(await sb.auth.signInWithOtp({
-      email, options: { shouldCreateUser: false, emailRedirectTo: location.origin + location.pathname },
-    }));
-    toast(`Login-Link an ${email} geschickt.`);
-  });
 }
 
 // ----- Übersicht -----------------------------------------------------
