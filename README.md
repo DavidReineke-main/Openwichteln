@@ -5,35 +5,34 @@ als statische Seite auf GitHub Pages, mit [Supabase](https://supabase.com) (kost
 
 ## Funktionen
 
-- **Gruppen erstellen** – wer eine Gruppe anlegt, ist automatisch Admin (Name, Budget, Datum, Beschreibung).
-- **Einladen per Link** – Admins sehen einen Einladungslink, können ihn kopieren/teilen und jederzeit erneuern (der alte wird ungültig).
-- **Wunschliste** – jedes Mitglied trägt Wünsche (mit optionalem Link und Details) ein.
-  Sichtbar **nur** für die Person selbst, die ausgeloste Schenker:in und die Admins.
+- **Kein Login** – wer eine Gruppe erstellt oder beitritt, bekommt einen **geheimen persönlichen Link**.
+  Der Link ist der Zugang (wie ein Passwort). Der Browser merkt sich die Links im localStorage, sodass die
+  Startseite automatisch „meine Gruppen“ zeigt. Auf einem anderen Gerät einfach den persönlichen Link öffnen
+  oder auf der Startseite einfügen.
+- **Gruppen erstellen** – wer eine Gruppe anlegt, ist Admin (Name, Budget, Datum, Beschreibung).
+- **Einladen per Link** – Admins teilen den Einladungslink; beim Beitreten wählt jede:r einen beliebigen Namen
+  (pro Gruppe eindeutig). Der Link lässt sich erneuern, der alte wird dann ungültig.
+- **Wunschliste** – sichtbar **nur** für die Person selbst, die ausgeloste Schenker:in und die Admins.
 - **Geheime Ausschlüsse** – „Ich möchte X nicht ziehen“ und „Ich möchte nicht von Y gezogen werden“.
   Sichtbar ausschließlich für die Person selbst – **auch Admins sehen sie nicht**.
-- **Auslosung durch Admins** – läuft serverseitig in der Datenbank und berücksichtigt alle Ausschlüsse.
-  Jede:r sieht nur, wen sie/er selbst beschenkt – auch der Admin sieht nur die eigene Zuteilung.
-  Ist mit den Ausschlüssen keine Auslosung möglich, gibt es eine Fehlermeldung (ohne zu verraten, wer was ausgeschlossen hat).
-- **Mitglieder verwalten** – Admins können Mitglieder entfernen, zu Admins machen, die Auslosung zurücksetzen und die Gruppe löschen.
+- **Auslosung durch Admins** – läuft serverseitig und berücksichtigt alle Ausschlüsse. Jede:r sieht nur, wen
+  sie/er selbst beschenkt – auch der Admin.
+- **Mitglieder verwalten** – Admins können Mitglieder entfernen, zu Admins machen, die Auslosung zurücksetzen
+  und die Gruppe löschen.
 
-## Geht das mit GitHub Pages?
+## Sicherheit
 
-Ja. GitHub Pages hostet nur statische Dateien, deshalb liegen die Daten in Supabase (Postgres).
-Die Geheimhaltung wird **in der Datenbank** über Row-Level-Security durchgesetzt (`supabase/schema.sql`) –
-nicht im Browser. Selbst wer die Seite manipuliert, kommt nicht an fremde Wünsche, Ausschlüsse oder Paarungen.
-Der Supabase-„anon“-Key im Frontend ist dafür gedacht, öffentlich zu sein.
+Repository und Supabase-Key sind öffentlich – das ist so gewollt. Die Tabellen sind für den öffentlichen Key
+komplett gesperrt; alle Zugriffe laufen über Datenbankfunktionen (`supabase/schema.sql`), die den geheimen
+Token aus dem persönlichen Link prüfen und nur herausgeben, was diese Person sehen darf. Die Tokens sind
+zufällig und stehen im `#`-Teil der URL, der nie an GitHub Pages übertragen wird.
 
-Anmeldung ohne E-Mail: Man registriert sich nur mit **Benutzername + Passwort**. Intern bildet die App
-daraus eine Platzhalter-Adresse (`benutzername@example.com`), an die nie etwas verschickt wird.
-Passwort vergessen? Das lässt sich nur im Supabase-SQL-Editor neu setzen:
+**Wichtig:** Wer einen persönlichen Link hat, ist diese Person. Links also nicht weitergeben. Geht ein Link
+verloren, gibt es keinen Weg zurück (Admins können die Person entfernen und neu einladen, solange noch nicht
+ausgelost wurde).
 
-```sql
-update auth.users set encrypted_password = crypt('NEUES-PASSWORT', gen_salt('bf'))
-where email = 'benutzername@example.com';
-```
-
-Hinweis zum kostenlosen Supabase-Plan: Projekte ohne Aktivität werden nach ca. einer Woche pausiert
-und lassen sich im Dashboard mit einem Klick wieder aufwecken.
+Hinweis zum kostenlosen Supabase-Plan: Projekte ohne Aktivität werden nach ca. einer Woche pausiert und
+lassen sich im Dashboard mit einem Klick wieder aufwecken.
 
 ## Einrichtung (ca. 10 Minuten)
 
@@ -50,10 +49,7 @@ und lassen sich im Dashboard mit einem Klick wieder aufwecken.
      `supabase/schema.sql` auf `main` läuft der Workflow automatisch erneut (das Skript ist wiederholbar).
 
    Alternativ den Inhalt von `supabase/schema.sql` im **SQL Editor** einfügen und ausführen.
-3. Optional: **Authentication → URL Configuration** → *Site URL* auf `https://davidreineke-main.github.io/Openwichteln/` setzen.
-4. **Wichtig:** Unter **Authentication → Sign In / Providers → Email** „**Confirm email**“ ausschalten
-   (die App nutzt keine echten E-Mail-Adressen).
-5. Unter **Project Settings → API** die *Project URL* und den *anon public* Key kopieren.
+3. Unter **Project Settings → API** die *Project URL* und den *Publishable* (bzw. *anon*) Key kopieren.
 
 ### 2. GitHub Pages aktivieren
 
@@ -81,8 +77,8 @@ python3 -m http.server 8000
 app/                 statische Web-App (wird auf GitHub Pages veröffentlicht)
   index.html
   css/style.css
-  js/app.js          Oberfläche + Routing (Hash-Routen: #/, #/g/<id>, #/join/<code>)
+  js/app.js          Oberfläche + Routing (Hash-Routen: #/, #/m/<token>, #/join/<code>)
   js/config.js       Supabase-URL + anon-Key
-supabase/schema.sql  Tabellen, Row-Level-Security, Auslosung (draw_names)
+supabase/schema.sql  Tabellen, Token-geschützte RPC-Funktionen, Auslosung (draw_names)
 .github/workflows/pages.yml  Deployment
 ```

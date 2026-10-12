@@ -1,21 +1,55 @@
 -- =====================================================================
--- OpenWichteln – Datenbankschema für Supabase
--- Einmal komplett im Supabase SQL-Editor ausführen.
+-- OpenWichteln – Datenbankschema für Supabase (ohne Login)
 --
--- Geheimhaltung wird über Row-Level-Security (RLS) durchgesetzt:
---   * Wünsche sieht nur: das Mitglied selbst, die Admins der Gruppe und
---     der/die ausgeloste Schenker:in.
---   * Ausschlüsse ("will ich nicht ziehen" / "will nicht gezogen werden
---     von") sieht ausschließlich die Person, die sie angelegt hat –
---     auch Admins nicht.
---   * Zuteilungen sieht nur der/die jeweilige Schenker:in.
---   * Die Auslosung läuft serverseitig in draw_names(), damit niemand
---     (auch nicht der Admin) Ausschlüsse oder Paarungen mitlesen kann.
+-- Einspielen: per GitHub Action "Supabase-Schema einspielen" oder im
+-- Supabase SQL-Editor. Das Skript ist wiederholbar.
+--
+-- Zugriffsmodell: Es gibt keine Konten. Jedes Mitglied hat einen geheimen
+-- persönlichen Token (steckt in seinem persönlichen Link). Die Tabellen sind
+-- für den öffentlichen API-Key komplett gesperrt; alles läuft über die
+-- RPC-Funktionen unten, die den Token prüfen und nur das herausgeben, was
+-- die Person sehen darf:
+--   * Wünsche: die Person selbst, Admins der Gruppe, der/die ausgeloste
+--     Schenker:in.
+--   * Ausschlüsse: ausschließlich die Person selbst (auch nicht Admins).
+--   * Zuteilung: nur der/die Schenker:in selbst (auch nicht Admins).
 -- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- Aufräumen einer älteren Schema-Version mit Login (falls vorhanden)
+-- ---------------------------------------------------------------------
+do $cleanup$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'members' and column_name = 'user_id'
+  ) then
+    drop table if exists public.assignments, public.exclusions, public.wishes,
+                         public.members, public.groups cascade;
+    drop function if exists public.create_group(text, text, text, date, text) cascade;
+    drop function if exists public.group_preview(text) cascade;
+    drop function if exists public.join_group(text, text) cascade;
+    drop function if exists public.get_invite_code(uuid) cascade;
+    drop function if exists public.regenerate_invite(uuid) cascade;
+    drop function if exists public.set_member_role(uuid, text) cascade;
+    drop function if exists public.remove_member(uuid) cascade;
+    drop function if exists public.draw_names(uuid) cascade;
+    drop function if exists public.reset_draw(uuid) cascade;
+    drop function if exists public.is_member(uuid) cascade;
+    drop function if exists public.is_admin(uuid) cascade;
+    drop function if exists public.owns_member(uuid) cascade;
+  end if;
+end
+$cleanup$;
 
 -- ---------------------------------------------------------------------
 -- Tabellen
 -- ---------------------------------------------------------------------
+
+create or replace function public.new_token()
+returns text language sql volatile as $fn$
+  select replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+$fn$;
 
 create table if not exists public.groups (
   id           uuid primary key default gen_random_uuid(),
@@ -23,29 +57,27 @@ create table if not exists public.groups (
   description  text check (char_length(description) <= 2000),
   budget       text check (char_length(budget) <= 50),
   event_date   date,
-  invite_code  text not null unique default replace(gen_random_uuid()::text, '-', ''),
+  invite_code  text not null unique default public.new_token(),
   drawn_at     timestamptz,
-  created_by   uuid not null references auth.users (id) on delete cascade,
   created_at   timestamptz not null default now()
 );
 
 create table if not exists public.members (
   id            uuid primary key default gen_random_uuid(),
   group_id      uuid not null references public.groups (id) on delete cascade,
-  user_id       uuid not null references auth.users (id) on delete cascade,
+  token         text not null unique default public.new_token(),
   display_name  text not null check (char_length(display_name) between 1 and 60),
   role          text not null default 'member' check (role in ('admin', 'member')),
-  joined_at     timestamptz not null default now(),
-  unique (group_id, user_id)
+  joined_at     timestamptz not null default now()
 );
-create index if not exists members_user_idx on public.members (user_id);
+create unique index if not exists members_name_unique on public.members (group_id, lower(display_name));
 
 create table if not exists public.wishes (
   id          uuid primary key default gen_random_uuid(),
   member_id   uuid not null references public.members (id) on delete cascade,
   title       text not null check (char_length(title) between 1 and 200),
   details     text check (char_length(details) <= 2000),
-  link        text check (link is null or link ~* '^https?://'),
+  link        text check (link is null or (link ~* '^https?://' and char_length(link) <= 1000)),
   created_at  timestamptz not null default now()
 );
 create index if not exists wishes_member_idx on public.wishes (member_id);
@@ -70,236 +102,288 @@ create table if not exists public.assignments (
   unique (group_id, receiver_id)
 );
 
--- ---------------------------------------------------------------------
--- Hilfsfunktionen (security definer, um RLS-Rekursion zu vermeiden)
--- ---------------------------------------------------------------------
-
-create or replace function public.is_member(p_group_id uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from members where group_id = p_group_id and user_id = auth.uid()
-  );
-$$;
-
-create or replace function public.is_admin(p_group_id uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from members
-    where group_id = p_group_id and user_id = auth.uid() and role = 'admin'
-  );
-$$;
-
-create or replace function public.owns_member(p_member_id uuid)
-returns boolean language sql stable security definer set search_path = public as $$
-  select exists (select 1 from members where id = p_member_id and user_id = auth.uid());
-$$;
-
--- ---------------------------------------------------------------------
--- Row-Level-Security
--- ---------------------------------------------------------------------
-
+-- Tabellen für die öffentliche API komplett sperren: RLS an, keine Policies.
 alter table public.groups      enable row level security;
 alter table public.members     enable row level security;
 alter table public.wishes      enable row level security;
 alter table public.exclusions  enable row level security;
 alter table public.assignments enable row level security;
-
--- Spaltenrechte: invite_code nur über get_invite_code() (Admins),
--- Statusfelder nur über RPCs änderbar.
 revoke all on public.groups, public.members, public.wishes,
-              public.exclusions, public.assignments from anon;
-revoke select, insert, update on public.groups  from authenticated;
-revoke insert, update         on public.members from authenticated;
-grant select (id, name, description, budget, event_date, drawn_at, created_by, created_at)
-  on public.groups to authenticated;
-grant update (name, description, budget, event_date) on public.groups to authenticated;
-grant update (display_name) on public.members to authenticated;
-revoke insert, update, delete on public.assignments from authenticated;
-
--- groups
-drop policy if exists groups_select on public.groups;
-create policy groups_select on public.groups for select to authenticated
-  using (is_member(id));
-drop policy if exists groups_update on public.groups;
-create policy groups_update on public.groups for update to authenticated
-  using (is_admin(id)) with check (is_admin(id));
-drop policy if exists groups_delete on public.groups;
-create policy groups_delete on public.groups for delete to authenticated
-  using (is_admin(id));
-
--- members
-drop policy if exists members_select on public.members;
-create policy members_select on public.members for select to authenticated
-  using (is_member(group_id));
-drop policy if exists members_update_self on public.members;
-create policy members_update_self on public.members for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
-
--- wishes
-drop policy if exists wishes_select on public.wishes;
-create policy wishes_select on public.wishes for select to authenticated
-  using (
-    exists (
-      select 1 from members m
-      where m.id = wishes.member_id
-        and (m.user_id = auth.uid() or is_admin(m.group_id))
-    )
-    or exists (
-      select 1 from assignments a
-      join members g on g.id = a.giver_id
-      where a.receiver_id = wishes.member_id and g.user_id = auth.uid()
-    )
-  );
-drop policy if exists wishes_insert on public.wishes;
-create policy wishes_insert on public.wishes for insert to authenticated
-  with check (owns_member(member_id));
-drop policy if exists wishes_update on public.wishes;
-create policy wishes_update on public.wishes for update to authenticated
-  using (owns_member(member_id)) with check (owns_member(member_id));
-drop policy if exists wishes_delete on public.wishes;
-create policy wishes_delete on public.wishes for delete to authenticated
-  using (owns_member(member_id));
-
--- exclusions: ausschließlich für die anlegende Person sichtbar
-drop policy if exists exclusions_select on public.exclusions;
-create policy exclusions_select on public.exclusions for select to authenticated
-  using (owns_member(member_id));
-drop policy if exists exclusions_insert on public.exclusions;
-create policy exclusions_insert on public.exclusions for insert to authenticated
-  with check (
-    owns_member(member_id)
-    and exists (
-      select 1 from members me
-      join members t on t.group_id = me.group_id
-      join groups g on g.id = me.group_id
-      where me.id = exclusions.member_id
-        and t.id = exclusions.target_member_id
-        and g.drawn_at is null
-    )
-  );
-drop policy if exists exclusions_delete on public.exclusions;
-create policy exclusions_delete on public.exclusions for delete to authenticated
-  using (owns_member(member_id));
-
--- assignments: nur der/die Schenker:in sieht die eigene Zuteilung
-drop policy if exists assignments_select on public.assignments;
-create policy assignments_select on public.assignments for select to authenticated
-  using (owns_member(giver_id));
+              public.exclusions, public.assignments from anon, authenticated;
 
 -- ---------------------------------------------------------------------
--- RPCs
+-- Interne Helfer (nicht öffentlich aufrufbar)
 -- ---------------------------------------------------------------------
 
+create or replace function public.member_by_token(p_token text)
+returns public.members language plpgsql stable security definer set search_path = public as $fn$
+declare m members%rowtype;
+begin
+  select * into m from members where token = p_token;
+  if not found then
+    raise exception 'Dieser persönliche Link ist ungültig oder du wurdest aus der Gruppe entfernt.';
+  end if;
+  return m;
+end;
+$fn$;
+
+create or replace function public.admin_by_token(p_token text)
+returns public.members language plpgsql stable security definer set search_path = public as $fn$
+declare m members%rowtype;
+begin
+  m := member_by_token(p_token);
+  if m.role <> 'admin' then raise exception 'Das dürfen nur Admins der Gruppe.'; end if;
+  return m;
+end;
+$fn$;
+
+create or replace function public.wishes_json(p_member_id uuid)
+returns jsonb language sql stable security definer set search_path = public as $fn$
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', id, 'title', title, 'details', details, 'link', link) order by created_at), '[]'::jsonb)
+  from wishes where member_id = p_member_id;
+$fn$;
+
+create or replace function public.assert_not_drawn(p_group_id uuid)
+returns void language plpgsql stable security definer set search_path = public as $fn$
+begin
+  if (select drawn_at from groups where id = p_group_id) is not null then
+    raise exception 'Das geht nach der Auslosung nicht mehr. Ein Admin kann die Auslosung zurücksetzen.';
+  end if;
+end;
+$fn$;
+
+-- ---------------------------------------------------------------------
+-- Öffentliche RPCs
+-- ---------------------------------------------------------------------
+
+-- Gruppe anlegen; gibt den persönlichen Token der Erstellerin (Admin) zurück
 create or replace function public.create_group(
   p_name text, p_description text, p_budget text, p_event_date date, p_display_name text
-) returns uuid language plpgsql security definer set search_path = public as $$
-declare v_id uuid;
+) returns text language plpgsql security definer set search_path = public as $fn$
+declare v_group uuid; v_token text;
 begin
-  if auth.uid() is null then raise exception 'Bitte zuerst anmelden'; end if;
-  insert into groups (name, description, budget, event_date, created_by)
-  values (trim(p_name), nullif(trim(p_description), ''), nullif(trim(p_budget), ''),
-          p_event_date, auth.uid())
-  returning id into v_id;
-  insert into members (group_id, user_id, display_name, role)
-  values (v_id, auth.uid(), trim(p_display_name), 'admin');
-  return v_id;
+  insert into groups (name, description, budget, event_date)
+  values (trim(p_name), nullif(trim(p_description), ''), nullif(trim(p_budget), ''), p_event_date)
+  returning id into v_group;
+  insert into members (group_id, display_name, role)
+  values (v_group, trim(p_display_name), 'admin')
+  returning token into v_token;
+  return v_token;
 end;
-$$;
+$fn$;
 
--- Vorschau für Einladungslinks (ohne Mitgliedschaft lesbar)
-create or replace function public.group_preview(p_code text)
-returns table (id uuid, name text, description text, budget text, event_date date,
-               member_count int, drawn boolean, already_member boolean)
-language sql stable security definer set search_path = public as $$
-  select g.id, g.name, g.description, g.budget, g.event_date,
-         (select count(*)::int from members m where m.group_id = g.id),
-         g.drawn_at is not null,
-         exists (select 1 from members m where m.group_id = g.id and m.user_id = auth.uid())
-  from groups g where g.invite_code = p_code;
-$$;
+create or replace function public.group_preview(p_invite text)
+returns jsonb language sql stable security definer set search_path = public as $fn$
+  select jsonb_build_object(
+    'name', g.name, 'description', g.description, 'budget', g.budget, 'event_date', g.event_date,
+    'drawn', g.drawn_at is not null,
+    'members', (select coalesce(jsonb_agg(display_name order by joined_at), '[]'::jsonb)
+                from members where group_id = g.id))
+  from groups g where g.invite_code = p_invite;
+$fn$;
 
-create or replace function public.join_group(p_code text, p_display_name text)
-returns uuid language plpgsql security definer set search_path = public as $$
-declare g groups%rowtype;
+create or replace function public.join_group(p_invite text, p_display_name text)
+returns text language plpgsql security definer set search_path = public as $fn$
+declare g groups%rowtype; v_token text;
 begin
-  if auth.uid() is null then raise exception 'Bitte zuerst anmelden'; end if;
-  select * into g from groups where invite_code = p_code;
-  if not found then raise exception 'Dieser Einladungslink ist ungültig oder abgelaufen'; end if;
-  if exists (select 1 from members where group_id = g.id and user_id = auth.uid()) then
-    return g.id;
+  select * into g from groups where invite_code = p_invite;
+  if not found then raise exception 'Dieser Einladungslink ist ungültig oder wurde erneuert.'; end if;
+  perform assert_not_drawn(g.id);
+  if (select count(*) from members where group_id = g.id) >= 100 then
+    raise exception 'Diese Gruppe ist voll.';
   end if;
-  if g.drawn_at is not null then
-    raise exception 'In dieser Gruppe wurde bereits gelost. Ein Admin muss die Auslosung erst zurücksetzen.';
+  if exists (select 1 from members where group_id = g.id and lower(display_name) = lower(trim(p_display_name))) then
+    raise exception 'Den Namen „%“ gibt es in der Gruppe schon – bitte einen anderen wählen.', trim(p_display_name);
   end if;
-  insert into members (group_id, user_id, display_name)
-  values (g.id, auth.uid(), trim(p_display_name));
-  return g.id;
+  insert into members (group_id, display_name) values (g.id, trim(p_display_name))
+  returning token into v_token;
+  return v_token;
 end;
-$$;
+$fn$;
 
-create or replace function public.get_invite_code(p_group_id uuid)
-returns text language plpgsql stable security definer set search_path = public as $$
+-- Alles, was die Person mit diesem Token sehen darf
+create or replace function public.get_state(p_token text)
+returns jsonb language plpgsql stable security definer set search_path = public as $fn$
+declare me members%rowtype; g groups%rowtype; is_admin boolean;
 begin
-  if not is_admin(p_group_id) then raise exception 'Nur Admins können Einladungslinks sehen'; end if;
-  return (select invite_code from groups where id = p_group_id);
+  me := member_by_token(p_token);
+  select * into g from groups where id = me.group_id;
+  is_admin := me.role = 'admin';
+  return jsonb_build_object(
+    'me', jsonb_build_object('id', me.id, 'display_name', me.display_name, 'role', me.role),
+    'group', jsonb_build_object(
+      'id', g.id, 'name', g.name, 'description', g.description, 'budget', g.budget,
+      'event_date', g.event_date, 'drawn_at', g.drawn_at,
+      'invite_code', case when is_admin then g.invite_code end),
+    'members', (select jsonb_agg(jsonb_build_object('id', id, 'display_name', display_name, 'role', role)
+                                 order by joined_at)
+                from members where group_id = g.id),
+    'my_wishes', wishes_json(me.id),
+    'my_exclusions', (select coalesce(jsonb_agg(jsonb_build_object(
+                         'id', id, 'target_member_id', target_member_id, 'kind', kind)), '[]'::jsonb)
+                      from exclusions where member_id = me.id),
+    'assignment', (select jsonb_build_object('receiver_id', a.receiver_id,
+                                             'receiver_name', r.display_name,
+                                             'wishes', wishes_json(a.receiver_id))
+                   from assignments a join members r on r.id = a.receiver_id
+                   where a.giver_id = me.id),
+    'all_wishes', case when is_admin then
+                    (select coalesce(jsonb_object_agg(m.id, wishes_json(m.id)), '{}'::jsonb)
+                     from members m where m.group_id = g.id)
+                  end
+  );
 end;
-$$;
+$fn$;
 
-create or replace function public.regenerate_invite(p_group_id uuid)
-returns text language plpgsql security definer set search_path = public as $$
-declare v_code text;
+-- Übersicht für die Startseite (Tokens aus dem localStorage)
+create or replace function public.list_memberships(p_tokens text[])
+returns jsonb language sql stable security definer set search_path = public as $fn$
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'token', m.token, 'display_name', m.display_name, 'role', m.role,
+           'group_name', g.name, 'event_date', g.event_date, 'drawn', g.drawn_at is not null)
+         order by g.created_at desc), '[]'::jsonb)
+  from members m join groups g on g.id = m.group_id
+  where m.token = any (p_tokens[1:100]);
+$fn$;
+
+create or replace function public.rename_member(p_token text, p_display_name text)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
 begin
-  if not is_admin(p_group_id) then raise exception 'Nur Admins können Einladungslinks erneuern'; end if;
-  update groups set invite_code = replace(gen_random_uuid()::text, '-', '')
-  where id = p_group_id returning invite_code into v_code;
-  return v_code;
+  me := member_by_token(p_token);
+  if exists (select 1 from members where group_id = me.group_id and id <> me.id
+             and lower(display_name) = lower(trim(p_display_name))) then
+    raise exception 'Den Namen „%“ gibt es in der Gruppe schon.', trim(p_display_name);
+  end if;
+  update members set display_name = trim(p_display_name) where id = me.id;
 end;
-$$;
+$fn$;
 
-create or replace function public.set_member_role(p_member_id uuid, p_role text)
-returns void language plpgsql security definer set search_path = public as $$
-declare m members%rowtype;
+create or replace function public.add_wish(p_token text, p_title text, p_details text, p_link text)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
 begin
-  select * into m from members where id = p_member_id;
-  if not found or not is_admin(m.group_id) then raise exception 'Keine Berechtigung'; end if;
-  if p_role not in ('admin', 'member') then raise exception 'Ungültige Rolle'; end if;
-  if p_role = 'member' and m.role = 'admin'
-     and (select count(*) from members where group_id = m.group_id and role = 'admin') <= 1 then
-    raise exception 'Die Gruppe braucht mindestens einen Admin';
+  me := member_by_token(p_token);
+  if (select count(*) from wishes where member_id = me.id) >= 50 then
+    raise exception 'Maximal 50 Wünsche pro Person.';
   end if;
-  update members set role = p_role where id = p_member_id;
+  insert into wishes (member_id, title, details, link)
+  values (me.id, trim(p_title), nullif(trim(p_details), ''), nullif(trim(p_link), ''));
 end;
-$$;
+$fn$;
 
-create or replace function public.remove_member(p_member_id uuid)
-returns void language plpgsql security definer set search_path = public as $$
-declare m members%rowtype;
+create or replace function public.delete_wish(p_token text, p_wish_id uuid)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
 begin
-  select * into m from members where id = p_member_id;
-  if not found then raise exception 'Mitglied nicht gefunden'; end if;
-  if not (is_admin(m.group_id) or m.user_id = auth.uid()) then
-    raise exception 'Keine Berechtigung';
+  me := member_by_token(p_token);
+  delete from wishes where id = p_wish_id and member_id = me.id;
+end;
+$fn$;
+
+create or replace function public.add_exclusion(p_token text, p_target_id uuid, p_kind text)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
+begin
+  me := member_by_token(p_token);
+  perform assert_not_drawn(me.group_id);
+  if not exists (select 1 from members where id = p_target_id and group_id = me.group_id) then
+    raise exception 'Diese Person ist nicht in der Gruppe.';
   end if;
-  if (select drawn_at from groups where id = m.group_id) is not null then
-    raise exception 'Nach der Auslosung kann niemand entfernt werden. Bitte zuerst die Auslosung zurücksetzen.';
+  insert into exclusions (member_id, target_member_id, kind)
+  values (me.id, p_target_id, p_kind)
+  on conflict do nothing;
+end;
+$fn$;
+
+create or replace function public.delete_exclusion(p_token text, p_exclusion_id uuid)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
+begin
+  me := member_by_token(p_token);
+  perform assert_not_drawn(me.group_id);
+  delete from exclusions where id = p_exclusion_id and member_id = me.id;
+end;
+$fn$;
+
+-- Selbst austreten (p_member_id null) oder als Admin jemanden entfernen
+create or replace function public.remove_member(p_token text, p_member_id uuid default null)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype; target members%rowtype;
+begin
+  me := member_by_token(p_token);
+  if p_member_id is null or p_member_id = me.id then
+    target := me;
+  else
+    me := admin_by_token(p_token);
+    select * into target from members where id = p_member_id and group_id = me.group_id;
+    if not found then raise exception 'Mitglied nicht gefunden.'; end if;
   end if;
-  if m.role = 'admin'
-     and (select count(*) from members where group_id = m.group_id and role = 'admin') <= 1
-     and (select count(*) from members where group_id = m.group_id) > 1 then
-    raise exception 'Bitte zuerst eine andere Person zum Admin machen';
+  perform assert_not_drawn(target.group_id);
+  if target.role = 'admin'
+     and (select count(*) from members where group_id = target.group_id and role = 'admin') <= 1
+     and (select count(*) from members where group_id = target.group_id) > 1 then
+    raise exception 'Bitte zuerst eine andere Person zum Admin machen.';
   end if;
-  delete from members where id = p_member_id;
-  -- letzte Person weg -> Gruppe löschen
-  delete from groups g where g.id = m.group_id
+  delete from members where id = target.id;
+  delete from groups g where g.id = target.group_id
     and not exists (select 1 from members where group_id = g.id);
 end;
-$$;
+$fn$;
+
+create or replace function public.set_member_role(p_token text, p_member_id uuid, p_role text)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype; target members%rowtype;
+begin
+  me := admin_by_token(p_token);
+  if p_role not in ('admin', 'member') then raise exception 'Ungültige Rolle.'; end if;
+  select * into target from members where id = p_member_id and group_id = me.group_id;
+  if not found then raise exception 'Mitglied nicht gefunden.'; end if;
+  if p_role = 'member' and target.role = 'admin'
+     and (select count(*) from members where group_id = me.group_id and role = 'admin') <= 1 then
+    raise exception 'Die Gruppe braucht mindestens einen Admin.';
+  end if;
+  update members set role = p_role where id = target.id;
+end;
+$fn$;
+
+create or replace function public.update_group(
+  p_token text, p_name text, p_description text, p_budget text, p_event_date date
+) returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
+begin
+  me := admin_by_token(p_token);
+  update groups set name = trim(p_name), description = nullif(trim(p_description), ''),
+                    budget = nullif(trim(p_budget), ''), event_date = p_event_date
+  where id = me.group_id;
+end;
+$fn$;
+
+create or replace function public.delete_group(p_token text)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
+begin
+  me := admin_by_token(p_token);
+  delete from groups where id = me.group_id;
+end;
+$fn$;
+
+create or replace function public.regenerate_invite(p_token text)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
+begin
+  me := admin_by_token(p_token);
+  update groups set invite_code = new_token() where id = me.group_id;
+end;
+$fn$;
 
 -- Die eigentliche Auslosung: randomisiertes Backtracking unter
 -- Berücksichtigung aller (geheimen) Ausschlüsse.
-create or replace function public.draw_names(p_group_id uuid)
-returns void language plpgsql security definer set search_path = public as $$
+create or replace function public.draw_names(p_token text)
+returns void language plpgsql security definer set search_path = public as $fn$
 declare
+  me       members%rowtype;
   ids      uuid[];
   n        int;
   allowed  boolean[];
@@ -311,15 +395,15 @@ declare
   steps    int := 0;
   found    boolean;
 begin
-  if not is_admin(p_group_id) then raise exception 'Nur Admins können die Auslosung starten'; end if;
-  perform 1 from groups where id = p_group_id for update;
-  if (select drawn_at from groups where id = p_group_id) is not null then
-    raise exception 'Die Auslosung wurde bereits durchgeführt';
+  me := admin_by_token(p_token);
+  perform 1 from groups where id = me.group_id for update;
+  if (select drawn_at from groups where id = me.group_id) is not null then
+    raise exception 'Die Auslosung wurde bereits durchgeführt.';
   end if;
 
-  select array_agg(id order by random()) into ids from members where group_id = p_group_id;
+  select array_agg(id order by random()) into ids from members where group_id = me.group_id;
   n := coalesce(array_length(ids, 1), 0);
-  if n < 3 then raise exception 'Für die Auslosung braucht ihr mindestens 3 Mitglieder'; end if;
+  if n < 3 then raise exception 'Für die Auslosung braucht ihr mindestens 3 Mitglieder.'; end if;
 
   -- allowed[(geber-1)*n + empfänger]
   allowed := array_fill(true, array[n * n]);
@@ -348,7 +432,7 @@ begin
   while k >= 1 and k <= n loop
     steps := steps + 1;
     if steps > 200000 then
-      raise exception 'Die Auslosung ist zu komplex – bitte Ausschlüsse reduzieren';
+      raise exception 'Die Auslosung ist zu komplex – bitte Ausschlüsse reduzieren.';
     end if;
     if asg[k] > 0 then
       used[asg[k]] := false;
@@ -379,36 +463,45 @@ begin
   end if;
 
   insert into assignments (group_id, giver_id, receiver_id)
-  select p_group_id, ids[x], ids[asg[x]] from generate_series(1, n) x;
-  update groups set drawn_at = now() where id = p_group_id;
+  select me.group_id, ids[x], ids[asg[x]] from generate_series(1, n) x;
+  update groups set drawn_at = now() where id = me.group_id;
 end;
-$$;
+$fn$;
 
-create or replace function public.reset_draw(p_group_id uuid)
-returns void language plpgsql security definer set search_path = public as $$
+create or replace function public.reset_draw(p_token text)
+returns void language plpgsql security definer set search_path = public as $fn$
+declare me members%rowtype;
 begin
-  if not is_admin(p_group_id) then raise exception 'Nur Admins können die Auslosung zurücksetzen'; end if;
-  delete from assignments where group_id = p_group_id;
-  update groups set drawn_at = null where id = p_group_id;
+  me := admin_by_token(p_token);
+  delete from assignments where group_id = me.group_id;
+  update groups set drawn_at = null where id = me.group_id;
 end;
-$$;
+$fn$;
 
--- RPCs nur für angemeldete Nutzer:innen
-revoke execute on function public.create_group(text, text, text, date, text) from public, anon;
-revoke execute on function public.group_preview(text)            from public, anon;
-revoke execute on function public.join_group(text, text)         from public, anon;
-revoke execute on function public.get_invite_code(uuid)          from public, anon;
-revoke execute on function public.regenerate_invite(uuid)        from public, anon;
-revoke execute on function public.set_member_role(uuid, text)    from public, anon;
-revoke execute on function public.remove_member(uuid)            from public, anon;
-revoke execute on function public.draw_names(uuid)               from public, anon;
-revoke execute on function public.reset_draw(uuid)               from public, anon;
-grant execute on function public.create_group(text, text, text, date, text) to authenticated;
-grant execute on function public.group_preview(text)            to authenticated;
-grant execute on function public.join_group(text, text)         to authenticated;
-grant execute on function public.get_invite_code(uuid)          to authenticated;
-grant execute on function public.regenerate_invite(uuid)        to authenticated;
-grant execute on function public.set_member_role(uuid, text)    to authenticated;
-grant execute on function public.remove_member(uuid)            to authenticated;
-grant execute on function public.draw_names(uuid)               to authenticated;
-grant execute on function public.reset_draw(uuid)               to authenticated;
+-- ---------------------------------------------------------------------
+-- Rechte: interne Helfer sperren, RPCs für den öffentlichen Key freigeben
+-- ---------------------------------------------------------------------
+
+revoke execute on function public.new_token()               from public, anon, authenticated;
+revoke execute on function public.member_by_token(text)     from public, anon, authenticated;
+revoke execute on function public.admin_by_token(text)      from public, anon, authenticated;
+revoke execute on function public.wishes_json(uuid)         from public, anon, authenticated;
+revoke execute on function public.assert_not_drawn(uuid)    from public, anon, authenticated;
+
+grant execute on function public.create_group(text, text, text, date, text)     to anon, authenticated;
+grant execute on function public.group_preview(text)                            to anon, authenticated;
+grant execute on function public.join_group(text, text)                         to anon, authenticated;
+grant execute on function public.get_state(text)                                to anon, authenticated;
+grant execute on function public.list_memberships(text[])                       to anon, authenticated;
+grant execute on function public.rename_member(text, text)                      to anon, authenticated;
+grant execute on function public.add_wish(text, text, text, text)               to anon, authenticated;
+grant execute on function public.delete_wish(text, uuid)                        to anon, authenticated;
+grant execute on function public.add_exclusion(text, uuid, text)                to anon, authenticated;
+grant execute on function public.delete_exclusion(text, uuid)                   to anon, authenticated;
+grant execute on function public.remove_member(text, uuid)                      to anon, authenticated;
+grant execute on function public.set_member_role(text, uuid, text)              to anon, authenticated;
+grant execute on function public.update_group(text, text, text, text, date)     to anon, authenticated;
+grant execute on function public.delete_group(text)                             to anon, authenticated;
+grant execute on function public.regenerate_invite(text)                        to anon, authenticated;
+grant execute on function public.draw_names(text)                               to anon, authenticated;
+grant execute on function public.reset_draw(text)                               to anon, authenticated;
