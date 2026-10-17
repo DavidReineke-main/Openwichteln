@@ -19,6 +19,14 @@ als statische Seite auf GitHub Pages, mit [Supabase](https://supabase.com) (kost
   sie/er selbst beschenkt – auch der Admin.
 - **Mitglieder verwalten** – Admins können Mitglieder entfernen, zu Admins machen, die Auslosung zurücksetzen
   und die Gruppe löschen.
+- **Verlorene Links ersetzen** – Admins können für ein Mitglied einen neuen persönlichen Link erstellen
+  (der alte wird ungültig; Wünsche, Ausschlüsse und Auslosung bleiben). Mit hinterlegter E-Mail geht der Link
+  direkt per Mail an die Person, ohne dass der Admin ihn sieht. Die Person sieht in der Gruppe, wer den Link
+  wann neu erstellt hat.
+- **E-Mail (optional)** – wer möchte, hinterlegt eine E-Mail-Adresse und bekommt den persönlichen Link per Mail
+  sowie Updates: Ergebnis der Auslosung (wen man beschenkt), neue Wünsche des eigenen Wichtelkinds, neue
+  Mitglieder (für Admins), geänderte Gruppeninfos und zurückgesetzte Auslosungen. „Link vergessen?“ auf der
+  Startseite schickt alle Links zu einer Adresse.
 
 ## Sicherheit
 
@@ -28,8 +36,8 @@ Token aus dem persönlichen Link prüfen und nur herausgeben, was diese Person s
 zufällig und stehen im `#`-Teil der URL, der nie an GitHub Pages übertragen wird.
 
 **Wichtig:** Wer einen persönlichen Link hat, ist diese Person. Links also nicht weitergeben. Geht ein Link
-verloren, gibt es keinen Weg zurück (Admins können die Person entfernen und neu einladen, solange noch nicht
-ausgelost wurde).
+verloren, kann ein Admin einen neuen erstellen oder man lässt ihn sich per Mail schicken (falls hinterlegt).
+E-Mail-Adressen sehen nur die Personen selbst; Admins sehen lediglich, *ob* jemand eine hinterlegt hat.
 
 Hinweis zum kostenlosen Supabase-Plan: Projekte ohne Aktivität werden nach ca. einer Woche pausiert und
 lassen sich im Dashboard mit einem Klick wieder aufwecken.
@@ -51,7 +59,22 @@ lassen sich im Dashboard mit einem Klick wieder aufwecken.
    Alternativ den Inhalt von `supabase/schema.sql` im **SQL Editor** einfügen und ausführen.
 3. Unter **Project Settings → API** die *Project URL* und den *Publishable* (bzw. *anon*) Key kopieren.
 
-### 2. GitHub Pages aktivieren
+### 2. E-Mail-Versand einrichten (optional)
+
+Mails verschickt die Datenbank selbst (Erweiterung `pg_net`) über [Brevo](https://www.brevo.com)
+(kostenlos bis 300 Mails/Tag, keine eigene Domain nötig). Der API-Schlüssel liegt nur in der Datenbank,
+nie im Frontend. Ohne diese Einrichtung funktioniert alles andere ganz normal, nur ohne Mails.
+
+1. Bei Brevo kostenlos registrieren.
+2. **Senders, Domains & Dedicated IPs → Senders → Add a sender**: deine Absender-Adresse eintragen und bestätigen.
+3. **SMTP & API → API Keys → Generate a new API key** und den Schlüssel kopieren.
+4. Im GitHub-Repo unter **Settings → Secrets and variables → Actions**:
+   - Secret `BREVO_API_KEY` = der API-Schlüssel
+   - Variable `MAIL_FROM` = die bestätigte Absender-Adresse
+   - optional Variable `MAIL_FROM_NAME` (Standard: „OpenWichteln“) und `SITE_URL` (Standard: die GitHub-Pages-Adresse)
+5. Workflow **„Supabase-Schema einspielen“** erneut starten – er überträgt die Einstellungen in die Datenbank.
+
+### 3. GitHub Pages aktivieren
 
 1. Im Repository **Settings → Secrets and variables → Actions → Variables** zwei Repository-Variablen anlegen:
    - `SUPABASE_URL` = Project URL
@@ -79,6 +102,7 @@ app/                 statische Web-App (wird auf GitHub Pages veröffentlicht)
   css/style.css
   js/app.js          Oberfläche + Routing (Hash-Routen: #/, #/m/<token>, #/join/<code>)
   js/config.js       Supabase-URL + anon-Key
-supabase/schema.sql  Tabellen, Token-geschützte RPC-Funktionen, Auslosung (draw_names)
+supabase/schema.sql  Tabellen, Token-geschützte RPC-Funktionen, Auslosung, E-Mail-Versand
+supabase/settings.sql  Mail-Einstellungen (wird vom Workflow befüllt)
 .github/workflows/pages.yml  Deployment
 ```

@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [supabase/schema.sql]
+    paths:
+      - supabase/**
+      - .github/workflows/supabase-schema.yml
 
 permissions:
   contents: read
@@ -30,3 +32,23 @@ jobs:
           command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
           psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -q -f supabase/schema.sql
           echo "Schema erfolgreich eingespielt."
+
+      - name: Mail-Einstellungen übernehmen
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          MAIL_FROM: ${{ vars.MAIL_FROM }}
+          MAIL_FROM_NAME: ${{ vars.MAIL_FROM_NAME }}
+          SITE_URL: ${{ vars.SITE_URL || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+        run: |
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q \
+            -v brevo_api_key="$BREVO_API_KEY" \
+            -v mail_from="$MAIL_FROM" \
+            -v mail_from_name="$MAIL_FROM_NAME" \
+            -v site_url="$SITE_URL" \
+            -f supabase/settings.sql
+          if [ -n "$BREVO_API_KEY" ] && [ -n "$MAIL_FROM" ]; then
+            echo "E-Mail-Versand ist eingerichtet (Absender: $MAIL_FROM)."
+          else
+            echo "::notice::E-Mail-Versand nicht aktiv – Secret BREVO_API_KEY und Variable MAIL_FROM setzen (siehe README)."
+          fi
