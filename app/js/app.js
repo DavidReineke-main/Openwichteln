@@ -18,19 +18,6 @@ const sb = configured
 // Token, dessen Link gerade frisch erzeugt wurde (Gruppe erstellt/beigetreten)
 let freshToken = null;
 
-// Server-Infos (z. B. ob E-Mail-Versand eingerichtet ist), einmal pro Seitenaufruf
-let appInfo = null;
-async function getAppInfo() {
-  if (!appInfo) {
-    try {
-      appInfo = await rpc('app_info');
-    } catch {
-      appInfo = { mail_enabled: false };
-    }
-  }
-  return appInfo;
-}
-
 // ---------------------------------------------------------------------
 // Helfer
 // ---------------------------------------------------------------------
@@ -185,30 +172,6 @@ function field(id, labelText, input, hint) {
   return h('div', { class: 'field' }, h('label', { for: id }, labelText), input, hint && h('p', { class: 'hint' }, hint));
 }
 
-function emailField(id, value) {
-  return field(id, 'E-Mail (optional)',
-    h('input', { name: 'email', type: 'email', maxlength: 254, autocomplete: 'email', placeholder: 'name@beispiel.de', value }),
-    'Dann bekommst du deinen Link per Mail und Updates – z. B. wen du beschenkst und wenn dein Wichtelkind Wünsche einträgt.');
-}
-
-// "Link vergessen?" – schickt alle Links zu einer E-Mail-Adresse
-function recoveryForm() {
-  const form = h('form', null,
-    h('div', { class: 'copybox' },
-      h('input', { name: 'email', type: 'email', required: true, autocomplete: 'email', placeholder: 'Deine E-Mail-Adresse', 'aria-label': 'E-Mail-Adresse' }),
-      h('button', { type: 'submit', class: 'secondary' }, 'Links schicken')),
-    h('p', { class: 'hint' }, 'Klappt für alle Gruppen, in denen du deine E-Mail hinterlegt hast.'));
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    run(form.querySelector('button'), async () => {
-      await rpc('request_links', { p_email: formData(form).email });
-      form.reset();
-      toast('Falls es Gruppen zu dieser Adresse gibt, ist die Mail unterwegs 📬');
-    });
-  });
-  return form;
-}
-
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -235,15 +198,11 @@ async function route() {
   } catch (err) {
     console.error(err);
     const invalidLink = errorMessage(err).includes('persönliche Link ist ungültig');
-    const info = invalidLink ? await getAppInfo() : null;
-    render(h('div', { class: 'narrow stack' },
-      h('div', { class: 'card' },
-        cardHead('😕', invalidLink ? 'Dieser Link funktioniert nicht (mehr)' : 'Da ist etwas schiefgelaufen', errorMessage(err)),
-        invalidLink && h('p', { class: 'small', style: 'margin-bottom:1rem' },
-          'Vielleicht hat ein Admin dir einen neuen Link erstellt. Frag in deiner Gruppe nach'
-          + (info?.mail_enabled ? ' oder lass dir deine Links per Mail schicken.' : '.')),
-        h('a', { href: '#/', class: 'btn secondary' }, 'Zur Startseite')),
-      info?.mail_enabled && h('div', { class: 'card' }, cardHead('📬', 'Link vergessen?'), recoveryForm())));
+    render(h('div', { class: 'narrow' }, h('div', { class: 'card' },
+      cardHead('😕', invalidLink ? 'Dieser Link funktioniert nicht (mehr)' : 'Da ist etwas schiefgelaufen', errorMessage(err)),
+      invalidLink && h('p', { class: 'small', style: 'margin-bottom:1rem' },
+        'Vielleicht hat ein Admin dir einen neuen Link erstellt. Frag in deiner Gruppe nach – Admins können dir jederzeit einen neuen schicken.'),
+      h('a', { href: '#/', class: 'btn secondary' }, 'Zur Startseite'))));
   }
 }
 
@@ -262,10 +221,7 @@ function renderSetupHint() {
 
 async function renderDashboard() {
   const tokens = loadTokens();
-  const [memberships, info] = await Promise.all([
-    tokens.length ? rpc('list_memberships', { p_tokens: tokens }) : [],
-    getAppInfo(),
-  ]);
+  const memberships = tokens.length ? await rpc('list_memberships', { p_tokens: tokens }) : [];
 
   // Links, die es nicht mehr gibt (Gruppe gelöscht / entfernt), vergessen
   const valid = new Set(memberships.map((m) => m.token));
@@ -281,7 +237,6 @@ async function renderDashboard() {
     h('div', { class: 'field', style: 'margin-top:.8rem' },
       h('label', { for: 'g-desc' }, 'Infos für alle (optional)'),
       h('textarea', { id: 'g-desc', name: 'description', maxlength: 2000, placeholder: 'Ort, Uhrzeit, Regeln …' })),
-    info.mail_enabled && h('div', { style: 'margin-top:.8rem' }, emailField('g-email')),
     h('div', { class: 'form-actions' }, h('button', { type: 'submit', class: 'lg' }, '🎄 Gruppe erstellen')));
 
   createForm.addEventListener('submit', (e) => {
@@ -290,7 +245,7 @@ async function renderDashboard() {
     run(createForm.querySelector('button[type=submit]'), async () => {
       const token = await rpc('create_group', {
         p_name: f.name, p_description: f.description, p_budget: f.budget,
-        p_event_date: f.event_date || null, p_display_name: f.display_name, p_email: f.email || null,
+        p_event_date: f.event_date || null, p_display_name: f.display_name,
       });
       rememberToken(token);
       freshToken = token;
@@ -340,18 +295,13 @@ async function renderDashboard() {
         h('aside', { class: 'card soft' },
           cardHead('🔑', 'Schon in einer Gruppe?', 'Auf einem neuen Gerät? Füge deinen persönlichen Link ein.'),
           importForm,
-          h('p', { class: 'hint' }, 'Auf diesem Gerät merken wir uns deine Gruppen automatisch.'),
-          info.mail_enabled && [
-            h('hr', { class: 'divider' }),
-            h('h3', { style: 'margin-bottom:.5rem' }, '📬 Link vergessen?'),
-            recoveryForm(),
-          ]))));
+          h('p', { class: 'hint' }, 'Auf diesem Gerät merken wir uns deine Gruppen automatisch.')))));
 }
 
 // ----- Einladung -----------------------------------------------------
 
 async function renderJoin(code) {
-  const [preview, info] = await Promise.all([rpc('group_preview', { p_invite: code }), getAppInfo()]);
+  const preview = await rpc('group_preview', { p_invite: code });
 
   if (!preview) {
     return render(h('div', { class: 'narrow' }, h('div', { class: 'card' },
@@ -363,15 +313,13 @@ async function renderJoin(code) {
   const form = h('form', null,
     field('j-name', 'Wie heißt du?', h('input', { name: 'display_name', required: true, maxlength: 60, placeholder: 'Dein Name' }),
       'So sehen dich die anderen in der Gruppe.'),
-    info.mail_enabled && emailField('j-email'),
     h('div', { class: 'form-actions' },
       h('button', { type: 'submit', class: 'lg block', disabled: preview.drawn }, 'Mitmachen 🎁')));
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     run(form.querySelector('button[type=submit]'), async () => {
-      const f = formData(form);
-      const token = await rpc('join_group', { p_invite: code, p_display_name: f.display_name, p_email: f.email || null });
+      const token = await rpc('join_group', { p_invite: code, p_display_name: formData(form).display_name });
       rememberToken(token);
       freshToken = token;
       toast('Willkommen in der Gruppe! 🎄');
@@ -559,7 +507,6 @@ function overviewTab(ctx) {
   // Frisch erstellt/beigetreten: persönlichen Link ganz nach oben
   const sidebar = ctx.fresh ? [] : [personalLinkCard(ctx)];
   if (isAdmin && !drawn) sidebar.unshift(inviteCard(ctx));
-  if (state.mail_enabled) sidebar.push(emailCard(ctx));
   sidebar.push(membersMiniCard(ctx));
   if (group.description) {
     sidebar.push(h('section', { class: 'card' }, cardHead('📝', 'Infos'), h('p', { class: 'small', style: 'white-space:pre-wrap' }, group.description)));
@@ -575,38 +522,6 @@ function overviewTab(ctx) {
         `${ctx.me.link_reset_by || 'Ein Admin'} hat deinen persönlichen Link am ${resetAt.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} neu erstellt. Ältere Links funktionieren nicht mehr.`)));
   }
   return top.length ? h('div', { class: 'stack' }, top, layout) : layout;
-}
-
-function emailCard({ token, me, reload }) {
-  const form = h('form', null,
-    h('div', { class: 'field' },
-      h('label', { for: 'm-email' }, 'Deine E-Mail-Adresse'),
-      h('input', { id: 'm-email', name: 'email', type: 'email', maxlength: 254, autocomplete: 'email', placeholder: 'name@beispiel.de', value: me.email || '' })),
-    h('label', { class: 'check' },
-      h('input', { type: 'checkbox', name: 'notify', checked: me.notify !== false }),
-      h('span', null, 'Updates per Mail', h('small', null, 'Auslosung, neue Wünsche deines Wichtelkinds, neue Mitglieder (für Admins) und Änderungen an der Gruppe.'))),
-    h('div', { class: 'form-actions' },
-      h('button', { type: 'submit', class: 'secondary sm' }, 'Speichern'),
-      me.email && h('button', {
-        type: 'button', class: 'ghost sm',
-        onclick: (e) => run(e.currentTarget, async () => {
-          await rpc('send_my_link', { p_token: token });
-          toast(`Link an ${me.email} geschickt 📬`);
-        }),
-      }, 'Link an mich mailen')));
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const email = form.querySelector('[name=email]').value.trim();
-    const notify = form.querySelector('[name=notify]').checked;
-    run(form.querySelector('button[type=submit]'), async () => {
-      await rpc('set_email', { p_token: token, p_email: email || null, p_notify: notify });
-      toast(email && email.toLowerCase() !== (me.email || '') ? 'Gespeichert – dein Link ist per Mail unterwegs 📬' : 'Gespeichert');
-      reload();
-    });
-  });
-  return h('section', { class: 'card' },
-    cardHead('✉️', 'E-Mail & Updates', me.email ? 'Nur du und das System kennen die Adresse.' : 'Optional – für deinen Link und Benachrichtigungen.'),
-    form);
 }
 
 function personalLinkCard({ token, fresh }) {
@@ -714,9 +629,8 @@ function exclusionsTab({ token, state, group, others, reload }) {
 
 // ----- Tab: Mitglieder -------------------------------------------------
 
-function resetLinkPanel({ token, state }, m) {
+function resetLinkPanel({ token }, m) {
   const panel = h('div', { class: 'card soft', style: 'margin-top:.7rem' });
-  const canMail = state.mail_enabled && m.has_email;
   const showLink = (newToken) => {
     const url = personalUrl(newToken);
     panel.replaceChildren(...[
@@ -726,34 +640,23 @@ function resetLinkPanel({ token, state }, m) {
         class: 'secondary sm',
         onclick: () => navigator.share({ title: 'Dein Wichtel-Link', text: `Hier ist dein neuer Wichtel-Link, ${m.display_name}:`, url }).catch(() => {}),
       }, 'Teilen …')),
-      h('p', { class: 'hint' }, `${m.display_name} sieht in der Gruppe, dass du den Link neu erstellt hast.`
-        + (canMail ? ' Der Link wurde zusätzlich per Mail geschickt.' : '')),
+      h('p', { class: 'hint' }, `${m.display_name} sieht in der Gruppe, dass du den Link neu erstellt hast.`),
     ].filter(Boolean));
   };
   panel.append(
     h('p', { class: 'small', style: 'margin-bottom:.7rem' },
-      `${m.display_name} hat den Link verloren? Du kannst einen neuen erstellen – der alte wird dabei ungültig. `
+      `${m.display_name} hat den Link verloren? Erstelle einen neuen – der alte wird dabei ungültig. `
       + 'Wünsche, Ausschlüsse und Auslosung bleiben erhalten.'),
-    h('div', { class: 'row' },
-      canMail && h('button', {
-        class: 'sm',
-        onclick: (e) => run(e.currentTarget, async () => {
-          await rpc('admin_reset_link', { p_token: token, p_member_id: m.id, p_via_mail: true });
-          panel.replaceChildren(h('p', { class: 'small' }, `✅ Neuer Link ist per Mail an ${m.display_name} unterwegs. Du selbst siehst ihn nicht.`));
-        }),
-      }, '📬 Per Mail schicken'),
-      h('button', {
-        class: `${canMail ? 'secondary ' : ''}sm`,
-        onclick: (e) => {
-          if (!confirm(`Neuen Link für ${m.display_name} erstellen? Der alte Link funktioniert danach nicht mehr.`)) return;
-          run(e.currentTarget, async () => {
-            showLink(await rpc('admin_reset_link', { p_token: token, p_member_id: m.id, p_via_mail: false }));
-          });
-        },
-      }, 'Link erstellen & anzeigen')),
-    h('p', { class: 'hint' }, canMail
-      ? 'Per Mail ist am diskretesten – dann sieht nur die Person selbst den Link.'
-      : 'Wer den Link hat, sieht das Wichtelkind der Person. Schick ihn direkt weiter.'));
+    h('button', {
+      class: 'sm',
+      onclick: (e) => {
+        if (!confirm(`Neuen Link für ${m.display_name} erstellen? Der alte Link funktioniert danach nicht mehr.`)) return;
+        run(e.currentTarget, async () => {
+          showLink(await rpc('admin_reset_link', { p_token: token, p_member_id: m.id }));
+        });
+      },
+    }, 'Neuen Link erstellen'),
+    h('p', { class: 'hint' }, 'Wer den Link hat, sieht das Wichtelkind der Person – schick ihn direkt an sie weiter.'));
   return panel;
 }
 
@@ -792,8 +695,7 @@ function membersTab(ctx) {
       h('div', { class: 'spread' },
         h('div', { class: 'person' }, avatar(m.display_name),
           h('div', { class: 'who' }, h('b', null, m.display_name, m.id === me.id ? ' (du)' : '')),
-          m.role === 'admin' && h('span', { class: 'badge admin' }, 'Admin'),
-          isAdmin && m.has_email && h('span', { class: 'badge', title: 'Hat eine E-Mail-Adresse hinterlegt' }, '✉️')),
+          m.role === 'admin' && h('span', { class: 'badge admin' }, 'Admin')),
         actions),
       panelSlot);
   }));

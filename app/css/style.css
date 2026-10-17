@@ -316,8 +316,3 @@ details.acc > .acc-body { padding: 0 .85rem .85rem; }
   .checklist li { flex-wrap: wrap; }
   .checklist li > .btn, .checklist li > button { margin-left: calc(28px + .75rem); }
 }
-
-/* Checkbox mit Beschreibung */
-label.check { display: flex; gap: .6rem; align-items: flex-start; font-weight: 600; margin-top: .8rem; cursor: pointer; }
-label.check input { width: 18px; height: 18px; margin: .15rem 0 0; flex: none; accent-color: var(--green); }
-label.check small { display: block; font-weight: 400; color: var(--muted); font-size: .82rem; margin-top: .1rem; }
