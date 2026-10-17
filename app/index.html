@@ -5,15 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenWichteln</title>
   <meta name="description" content="Wichtelgruppen erstellen, Freunde per Link einladen, Wünsche eintragen und geheim auslosen.">
+  <meta name="theme-color" content="#143f30">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎁</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Inter:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <header class="topbar">
-    <a href="#/" class="brand">🎁 OpenWichteln</a>
+    <div class="topbar-inner">
+      <a href="#/" class="brand">🎁 OpenWichteln</a>
+    </div>
   </header>
   <main id="app" class="container">
-    <p class="muted">Lade …</p>
+    <p class="loading">Lade …</p>
   </main>
   <div id="toast" class="toast" hidden></div>
   <script type="module" src="js/app.js"></script>
