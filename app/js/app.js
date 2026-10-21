@@ -301,6 +301,16 @@ async function renderDashboard() {
 // ----- Einladung -----------------------------------------------------
 
 async function renderJoin(code) {
+  // Schon Mitglied (Link auf diesem Gerät gespeichert)? Dann direkt zur eigenen Seite.
+  const tokens = loadTokens();
+  if (tokens.length) {
+    const own = await rpc('find_membership', { p_invite: code, p_tokens: tokens });
+    if (own) {
+      location.replace(`#/m/${own}`);
+      return;
+    }
+  }
+
   const preview = await rpc('group_preview', { p_invite: code });
 
   if (!preview) {

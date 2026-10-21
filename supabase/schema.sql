@@ -199,6 +199,15 @@ returns jsonb language sql stable security definer set search_path = public as $
   from groups g where g.invite_code = p_invite;
 $fn$;
 
+-- Einladungslink geöffnet: Ist man über einen der gespeicherten persönlichen
+-- Links schon Mitglied dieser Gruppe? Gibt dann diesen Token zurück.
+create or replace function public.find_membership(p_invite text, p_tokens text[])
+returns text language sql stable security definer set search_path = public as $fn$
+  select m.token from members m join groups g on g.id = m.group_id
+  where g.invite_code = p_invite and m.token = any (p_tokens[1:100])
+  limit 1;
+$fn$;
+
 create or replace function public.join_group(p_invite text, p_display_name text)
 returns text language plpgsql security definer set search_path = public as $fn$
 declare g groups%rowtype; v_token text;
@@ -540,3 +549,4 @@ grant execute on function public.regenerate_invite(text)                        
 grant execute on function public.draw_names(text)                               to anon, authenticated;
 grant execute on function public.reset_draw(text)                               to anon, authenticated;
 grant execute on function public.admin_reset_link(text, uuid)                 to anon, authenticated;
+grant execute on function public.find_membership(text, text[])                to anon, authenticated;
