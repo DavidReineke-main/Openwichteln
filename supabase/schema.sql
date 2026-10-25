@@ -50,6 +50,7 @@ drop function if exists public.set_email(text, text, boolean);
 drop function if exists public.send_my_link(text);
 drop function if exists public.request_links(text);
 drop function if exists public.admin_reset_link(text, uuid, boolean);
+drop function if exists public.admin_reset_link(text, uuid);
 drop schema if exists private cascade;
 
 -- ---------------------------------------------------------------------
@@ -112,9 +113,9 @@ create table if not exists public.assignments (
   unique (group_id, receiver_id)
 );
 
--- Link-Erneuerung durch Admins (für den Hinweis an die betroffene Person)
-alter table public.members add column if not exists link_reset_at timestamptz;
-alter table public.members add column if not exists link_reset_by text;
+-- Reste der zwischenzeitlichen Link-Erneuerung entfernen
+alter table public.members drop column if exists link_reset_at;
+alter table public.members drop column if exists link_reset_by;
 alter table public.members drop column if exists email;
 alter table public.members drop column if exists notify;
 
@@ -236,13 +237,13 @@ begin
   select * into g from groups where id = me.group_id;
   is_admin := me.role = 'admin';
   return jsonb_build_object(
-    'me', jsonb_build_object('id', me.id, 'display_name', me.display_name, 'role', me.role,
-                             'link_reset_at', me.link_reset_at, 'link_reset_by', me.link_reset_by),
+    'me', jsonb_build_object('id', me.id, 'display_name', me.display_name, 'role', me.role),
     'group', jsonb_build_object(
       'id', g.id, 'name', g.name, 'description', g.description, 'budget', g.budget,
       'event_date', g.event_date, 'drawn_at', g.drawn_at,
       'invite_code', case when is_admin then g.invite_code end),
-    'members', (select jsonb_agg(jsonb_build_object('id', id, 'display_name', display_name, 'role', role)
+    'members', (select jsonb_agg(jsonb_build_object('id', id, 'display_name', display_name, 'role', role,
+                                                    'token', case when is_admin then token end)
                                  order by joined_at)
                 from members where group_id = g.id),
     'my_wishes', wishes_json(me.id),
@@ -504,20 +505,22 @@ begin
 end;
 $fn$;
 
--- Admin erstellt einen neuen persönlichen Link für ein Mitglied, z. B. wenn es
--- seinen verloren hat. Der alte Link wird ungültig, alles andere bleibt erhalten.
--- Die Person sieht in der Gruppe, wer den Link wann neu erstellt hat.
-create or replace function public.admin_reset_link(p_token text, p_member_id uuid)
+-- Admin fügt eine Person direkt hinzu und bekommt deren persönlichen Link
+create or replace function public.admin_add_member(p_token text, p_display_name text)
 returns text language plpgsql security definer set search_path = public as $fn$
-declare me members%rowtype; target members%rowtype;
+declare me members%rowtype; v_token text;
 begin
   me := admin_by_token(p_token);
-  select * into target from members where id = p_member_id and group_id = me.group_id;
-  if not found then raise exception 'Mitglied nicht gefunden.'; end if;
-  if target.id = me.id then raise exception 'Deinen eigenen Link findest du in der Übersicht.'; end if;
-  update members set token = new_token(), link_reset_at = now(), link_reset_by = me.display_name
-  where id = target.id returning * into target;
-  return target.token;
+  perform assert_not_drawn(me.group_id);
+  if (select count(*) from members where group_id = me.group_id) >= 100 then
+    raise exception 'Diese Gruppe ist voll.';
+  end if;
+  if exists (select 1 from members where group_id = me.group_id and lower(display_name) = lower(trim(p_display_name))) then
+    raise exception 'Den Namen „%“ gibt es in der Gruppe schon – bitte einen anderen wählen.', trim(p_display_name);
+  end if;
+  insert into members (group_id, display_name) values (me.group_id, trim(p_display_name))
+  returning token into v_token;
+  return v_token;
 end;
 $fn$;
 
@@ -548,5 +551,5 @@ grant execute on function public.delete_group(text)                             
 grant execute on function public.regenerate_invite(text)                        to anon, authenticated;
 grant execute on function public.draw_names(text)                               to anon, authenticated;
 grant execute on function public.reset_draw(text)                               to anon, authenticated;
-grant execute on function public.admin_reset_link(text, uuid)                 to anon, authenticated;
+grant execute on function public.admin_add_member(text, text)                  to anon, authenticated;
 grant execute on function public.find_membership(text, text[])                to anon, authenticated;

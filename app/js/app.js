@@ -201,7 +201,7 @@ async function route() {
     render(h('div', { class: 'narrow' }, h('div', { class: 'card' },
       cardHead('😕', invalidLink ? 'Dieser Link funktioniert nicht (mehr)' : 'Da ist etwas schiefgelaufen', errorMessage(err)),
       invalidLink && h('p', { class: 'small', style: 'margin-bottom:1rem' },
-        'Vielleicht hat ein Admin dir einen neuen Link erstellt. Frag in deiner Gruppe nach – Admins können dir jederzeit einen neuen schicken.'),
+        'Prüf, ob du den Link vollständig kopiert hast. Admins deiner Gruppe können dir deinen Link jederzeit nochmal schicken.'),
       h('a', { href: '#/', class: 'btn secondary' }, 'Zur Startseite'))));
   }
 }
@@ -525,12 +525,6 @@ function overviewTab(ctx) {
   const layout = h('div', { class: 'layout' }, main, h('aside', { class: 'stack' }, sidebar));
   const top = [];
   if (ctx.fresh) top.push(personalLinkCard(ctx));
-  const resetAt = ctx.me.link_reset_at && new Date(ctx.me.link_reset_at);
-  if (resetAt && Date.now() - resetAt.getTime() < 30 * 24 * 3600 * 1000) {
-    top.push(h('div', { class: 'card soft' },
-      cardHead('🔄', 'Du nutzt einen neuen Link',
-        `${ctx.me.link_reset_by || 'Ein Admin'} hat deinen persönlichen Link am ${resetAt.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} neu erstellt. Ältere Links funktionieren nicht mehr.`)));
-  }
   return top.length ? h('div', { class: 'stack' }, top, layout) : layout;
 }
 
@@ -544,7 +538,7 @@ function personalLinkCard({ token, fresh }) {
 function inviteCard({ group }) {
   const link = inviteUrl(group.invite_code);
   return h('section', { class: 'card' },
-    cardHead('💌', 'Leute einladen', 'Schick diesen Link an alle, die mitmachen.'),
+    cardHead('💌', 'Leute einladen', 'Schick diesen Link an alle, die mitmachen – oder füge Leute im Tab „Mitglieder“ direkt hinzu.'),
     copyBox(link, 'Einladungslink'),
     navigator.share && h('div', { class: 'form-actions' }, h('button', {
       class: 'secondary sm',
@@ -639,35 +633,48 @@ function exclusionsTab({ token, state, group, others, reload }) {
 
 // ----- Tab: Mitglieder -------------------------------------------------
 
-function resetLinkPanel({ token }, m) {
-  const panel = h('div', { class: 'card soft', style: 'margin-top:.7rem' });
-  const showLink = (newToken) => {
-    const url = personalUrl(newToken);
-    panel.replaceChildren(...[
-      h('p', { class: 'small', style: 'margin-bottom:.6rem' }, `Neuer Link für ${m.display_name} – der alte funktioniert nicht mehr. Schick ihn jetzt weiter:`),
-      copyBox(url, `Neuer Link für ${m.display_name}`),
-      navigator.share && h('div', { class: 'form-actions' }, h('button', {
-        class: 'secondary sm',
-        onclick: () => navigator.share({ title: 'Dein Wichtel-Link', text: `Hier ist dein neuer Wichtel-Link, ${m.display_name}:`, url }).catch(() => {}),
-      }, 'Teilen …')),
-      h('p', { class: 'hint' }, `${m.display_name} sieht in der Gruppe, dass du den Link neu erstellt hast.`),
-    ].filter(Boolean));
-  };
-  panel.append(
-    h('p', { class: 'small', style: 'margin-bottom:.7rem' },
-      `${m.display_name} hat den Link verloren? Erstelle einen neuen – der alte wird dabei ungültig. `
-      + 'Wünsche, Ausschlüsse und Auslosung bleiben erhalten.'),
-    h('button', {
-      class: 'sm',
-      onclick: (e) => {
-        if (!confirm(`Neuen Link für ${m.display_name} erstellen? Der alte Link funktioniert danach nicht mehr.`)) return;
-        run(e.currentTarget, async () => {
-          showLink(await rpc('admin_reset_link', { p_token: token, p_member_id: m.id }));
-        });
-      },
-    }, 'Neuen Link erstellen'),
-    h('p', { class: 'hint' }, 'Wer den Link hat, sieht das Wichtelkind der Person – schick ihn direkt an sie weiter.'));
-  return panel;
+// Persönlichen Link eines Mitglieds anzeigen (nur Admins bekommen ihn vom Server)
+function memberLinkPanel(m, intro) {
+  const url = personalUrl(m.token);
+  return h('div', { class: 'card soft', style: 'margin-top:.7rem' },
+    h('p', { class: 'small', style: 'margin-bottom:.6rem' }, intro || `Persönlicher Link von ${m.display_name}:`),
+    copyBox(url, `Link von ${m.display_name}`),
+    navigator.share && h('div', { class: 'form-actions' }, h('button', {
+      class: 'secondary sm',
+      onclick: () => navigator.share({ title: 'Dein Wichtel-Link', text: `Hier ist dein Wichtel-Link, ${m.display_name}:`, url }).catch(() => {}),
+    }, 'Teilen …')),
+    h('p', { class: 'hint' }, `Nur an ${m.display_name} schicken – wer den Link hat, sieht das Wichtelkind der Person.`));
+}
+
+// Zuletzt hinzugefügte Person (Link nach dem Neuladen noch anzeigen)
+let lastAdded = null;
+
+function addMemberCard({ token, group, reload }) {
+  const added = lastAdded && lastAdded.groupId === group.id ? lastAdded : null;
+  lastAdded = null;
+  if (group.drawn_at) {
+    return h('section', { class: 'card' },
+      cardHead('➕', 'Person hinzufügen', 'Nach der Auslosung kann niemand mehr dazukommen.'));
+  }
+  const form = h('form', null,
+    h('div', { class: 'copybox' },
+      h('input', { name: 'display_name', required: true, maxlength: 60, placeholder: 'Name', 'aria-label': 'Name der neuen Person' }),
+      h('button', { type: 'submit' }, 'Hinzufügen')),
+    h('p', { class: 'hint' }, 'Für Leute ohne eigenes Handy oder die du lieber direkt anlegst. Du bekommst danach ihren Link.'));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = formData(form).display_name.trim();
+    run(form.querySelector('button'), async () => {
+      const newToken = await rpc('admin_add_member', { p_token: token, p_display_name: name });
+      lastAdded = { groupId: group.id, display_name: name, token: newToken };
+      toast(`${name} hinzugefügt`);
+      reload();
+    });
+  });
+  return h('section', { class: `card ${added ? 'accent' : ''}` },
+    cardHead('➕', 'Person hinzufügen', 'Legt ein neues Mitglied an.'),
+    form,
+    added && memberLinkPanel(added, `✅ ${added.display_name} ist dabei. Schick ${added.display_name} jetzt diesen Link:`));
 }
 
 function membersTab(ctx) {
@@ -681,9 +688,9 @@ function membersTab(ctx) {
         class: 'secondary sm',
         onclick: () => {
           if (panelSlot.firstChild) panelSlot.replaceChildren();
-          else panelSlot.replaceChildren(resetLinkPanel(ctx, m));
+          else panelSlot.replaceChildren(memberLinkPanel(m));
         },
-      }, '🔑 Neuer Link'),
+      }, '🔗 Link'),
       h('button', {
         class: 'secondary sm',
         onclick: (e) => run(e.currentTarget, async () => {
@@ -744,9 +751,10 @@ function membersTab(ctx) {
 
   return h('div', { class: 'layout' },
     h('section', { class: 'card' },
-      cardHead('👥', `Mitglieder (${members.length})`, isAdmin ? 'Als Admin kannst du Rollen vergeben, Leute entfernen und verlorene Links ersetzen.' : null),
+      cardHead('👥', `Mitglieder (${members.length})`, isAdmin ? 'Als Admin kannst du Leute hinzufügen, Links weitergeben, Rollen vergeben und Leute entfernen.' : null),
       list),
     h('aside', { class: 'stack' },
+      isAdmin && addMemberCard(ctx),
       h('section', { class: 'card' }, cardHead('🏷️', 'Dein Name'), nameForm),
       h('section', { class: 'card' },
         cardHead('🚪', 'Gerät & Austritt'),

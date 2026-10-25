@@ -19,9 +19,10 @@ als statische Seite auf GitHub Pages, mit [Supabase](https://supabase.com) (kost
   sie/er selbst beschenkt – auch der Admin.
 - **Mitglieder verwalten** – Admins können Mitglieder entfernen, zu Admins machen, die Auslosung zurücksetzen
   und die Gruppe löschen.
-- **Verlorene Links ersetzen** – Admins können für ein Mitglied einen neuen persönlichen Link erstellen und
-  weiterschicken. Der alte wird ungültig; Wünsche, Ausschlüsse und Auslosung bleiben erhalten. Die Person sieht
-  in der Gruppe, wer den Link wann neu erstellt hat.
+- **Leute direkt hinzufügen** – Admins können Personen auch ohne Einladungslink anlegen und bekommen deren
+  persönlichen Link zum Weiterschicken.
+- **Links weitergeben** – Admins sehen im Tab „Mitglieder“ den persönlichen Link jedes Mitglieds und können ihn
+  kopieren, z. B. wenn jemand seinen verloren hat.
 
 ## Sicherheit
 
@@ -31,7 +32,8 @@ Token aus dem persönlichen Link prüfen und nur herausgeben, was diese Person s
 zufällig und stehen im `#`-Teil der URL, der nie an GitHub Pages übertragen wird.
 
 **Wichtig:** Wer einen persönlichen Link hat, ist diese Person. Links also nicht weitergeben. Geht ein Link
-verloren, kann ein Admin im Tab „Mitglieder“ einen neuen erstellen.
+verloren, kann ein Admin ihn im Tab „Mitglieder“ kopieren und nochmal schicken. Dadurch könnten Admins
+theoretisch auch die Zuteilung anderer einsehen – Admin-Rechte also nur an vertrauenswürdige Personen geben.
 
 Hinweis zum kostenlosen Supabase-Plan: Projekte ohne Aktivität werden nach ca. einer Woche pausiert und
 lassen sich im Dashboard mit einem Klick wieder aufwecken.

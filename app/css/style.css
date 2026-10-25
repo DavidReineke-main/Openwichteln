@@ -292,7 +292,8 @@ button.link:hover { background: none; text-decoration: underline; }
 
 /* Kopieren */
 .copybox { display: flex; gap: .5rem; }
-.copybox input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; min-width: 0; }
+.copybox input { min-width: 0; }
+.copybox input[readonly] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
 
 details.acc { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
 details.acc + details.acc { margin-top: .5rem; }
