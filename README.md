@@ -15,8 +15,8 @@ als statische Seite auf GitHub Pages, mit [Supabase](https://supabase.com) (kost
 - **Wunschliste** – sichtbar **nur** für die Person selbst, die ausgeloste Schenker:in und die Admins.
 - **Geheime Ausschlüsse** – „Ich möchte X nicht ziehen“ und „Ich möchte nicht von Y gezogen werden“.
   Sichtbar ausschließlich für die Person selbst – **auch Admins sehen sie nicht**.
-- **Auslosung durch Admins** – läuft serverseitig und berücksichtigt alle Ausschlüsse. Jede:r sieht nur, wen
-  sie/er selbst beschenkt – auch der Admin.
+- **Auslosung durch Admins** – läuft serverseitig und berücksichtigt alle Ausschlüsse. Mitglieder sehen nur, wen
+  sie selbst beschenken; Admins sehen im Admin-Tab beim Aufklappen einer Wunschliste, wer die Person gezogen hat.
 - **Mitglieder verwalten** – Admins können Mitglieder entfernen, zu Admins machen, die Auslosung zurücksetzen
   und die Gruppe löschen.
 - **Leute direkt hinzufügen** – Admins können Personen auch ohne Einladungslink anlegen und bekommen deren
@@ -32,8 +32,8 @@ Token aus dem persönlichen Link prüfen und nur herausgeben, was diese Person s
 zufällig und stehen im `#`-Teil der URL, der nie an GitHub Pages übertragen wird.
 
 **Wichtig:** Wer einen persönlichen Link hat, ist diese Person. Links also nicht weitergeben. Geht ein Link
-verloren, kann ein Admin ihn im Tab „Mitglieder“ kopieren und nochmal schicken. Dadurch könnten Admins
-theoretisch auch die Zuteilung anderer einsehen – Admin-Rechte also nur an vertrauenswürdige Personen geben.
+verloren, kann ein Admin ihn im Tab „Mitglieder“ kopieren und nochmal schicken. Admins sehen außerdem, wer wen
+gezogen hat – Admin-Rechte also nur an vertrauenswürdige Personen geben.
 
 Hinweis zum kostenlosen Supabase-Plan: Projekte ohne Aktivität werden nach ca. einer Woche pausiert und
 lassen sich im Dashboard mit einem Klick wieder aufwecken.

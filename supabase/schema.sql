@@ -258,7 +258,13 @@ begin
     'all_wishes', case when is_admin then
                     (select coalesce(jsonb_object_agg(m.id, wishes_json(m.id)), '{}'::jsonb)
                      from members m where m.group_id = g.id)
-                  end
+                  end,
+    -- Für Admins: wer wen gezogen hat (Empfänger-ID -> Name der Schenker:in)
+    'drawn_by', case when is_admin then
+                  (select coalesce(jsonb_object_agg(a.receiver_id, giver.display_name), '{}'::jsonb)
+                   from assignments a join members giver on giver.id = a.giver_id
+                   where a.group_id = g.id)
+                end
   );
 end;
 $fn$;

@@ -778,6 +778,7 @@ function adminTab(ctx) {
   const { token, state, group, members, reload } = ctx;
   const drawn = !!group.drawn_at;
   const allWishes = state.all_wishes || {};
+  const drawnBy = state.drawn_by || {};
 
   const editForm = h('form', null,
     field('e-name', 'Name', h('input', { name: 'name', required: true, maxlength: 100, value: group.name })),
@@ -806,20 +807,23 @@ function adminTab(ctx) {
       ? `Ausgelost am ${new Date(group.drawn_at).toLocaleString('de-DE')}.`
       : `${plural(members.length, 'Mitglied', 'Mitglieder')} dabei.`),
     h('p', { class: 'small muted', style: 'margin-bottom:1rem' }, drawn
-      ? 'Die Paarungen sind geheim – auch du siehst nur deine eigene. Beim Zurücksetzen wird alles verworfen und neu gelost.'
+      ? 'Wer wen gezogen hat, siehst du unten beim Aufklappen der Wunschlisten. Beim Zurücksetzen wird alles verworfen und neu gelost.'
       : members.length < 3
         ? 'Für die Auslosung braucht ihr mindestens 3 Mitglieder.'
         : 'Die geheimen Ausschlüsse werden automatisch berücksichtigt. Danach kann niemand mehr beitreten.'),
     drawButton(ctx, 'lg'));
 
   const wishesCard = h('section', { class: 'card' },
-    cardHead('📋', 'Wünsche aller Mitglieder', 'Als Admin siehst du alle Wunschlisten.'),
+    cardHead('📋', 'Wünsche aller Mitglieder', drawn ? 'Aufklappen zeigt die Wunschliste und wer die Person gezogen hat.' : 'Als Admin siehst du alle Wunschlisten.'),
     members.map((m) => {
       const list = allWishes[m.id] || [];
       return h('details', { class: 'acc' },
         h('summary', null, avatar(m.display_name), m.display_name,
           h('span', { class: `badge ${list.length ? 'ok' : ''}` }, plural(list.length, 'Wunsch', 'Wünsche'))),
-        h('div', { class: 'acc-body' }, wishList(list, { empty: 'Noch keine Wünsche.' })));
+        h('div', { class: 'acc-body' },
+          drawn && h('p', { class: 'small', style: 'margin-bottom:.6rem' }, '🎅 Gezogen von: ',
+            h('b', null, drawnBy[m.id] || '– (war bei der Auslosung noch nicht dabei)')),
+          wishList(list, { empty: 'Noch keine Wünsche.' })));
     }));
 
   const inviteAdmin = h('section', { class: 'card' },
